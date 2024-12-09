@@ -1,0 +1,294 @@
+---
+title: "Final Project"
+author: "Raymundo Lopez"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(purrr)
+library(ggpubr)
+library(ggcorrplot)
+library(factoextra)
+```
+
+\newpage
+
+### Data Set #1 - Pricing Cars
+
+For this exercise I'm going to go ahead and fit a logistic regression model mapping price as a function of the other variables in this data set.
+
+As far as data transformations go, we will be doing the following:
+
+* Drop Column 1 (or just omit it from our training)
+* Convert trim to a factor datatype so our model knows it's categorical.
+* Drop subTrim as it's mostly missing and only describes hybrid or not, but that's specififed in the fuel type already.
+* Convert condition to a factor datatype.
+* Convert isOneOwner to 1s and 0s
+* Convert color to factor datatype.
+* Convert displacement to numerical data.
+* Convert fuel, state, region, soundSystem, and wheelType to factor datatype.
+* Drop wheelSize as there are too many missing types.
+* featureCount and price will remain unchanged.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+carsData <- read_excel("cars_big.xlsx")
+carsData$trim <- as.factor(carsData$trim)
+carsData$subTrim <- as.factor(carsData$subTrim)
+carsData$condition <- as.factor(carsData$condition)
+carsData$isOneOwner[carsData$isOneOwner == 't'] <- 1
+carsData$isOneOwner[carsData$isOneOwner == 'f'] <- 0
+carsData$isOneOwner <- as.numeric(carsData$isOneOwner)
+carsData$color <- as.factor(carsData$color)
+carsData$displacement <- substr(carsData$displacement, 1, nchar(carsData$displacement) - 2) %>% as.numeric()
+carsData$fuel <- as.factor(carsData$fuel)
+carsData$state <- as.factor(carsData$state)
+carsData$region <- as.factor(carsData$region)
+carsData$soundSystem <- as.factor(carsData$soundSystem)
+carsData$wheelType <- as.factor(carsData$wheelType)
+
+head(carsData, 10)
+```
+
+
+\newpage
+
+Due to the size of our data set and prominence of categorical data, I don't think any visual exploratory work such as a scatter plot matrix will be very useful, and since so much is non-numerical we can't do a correlation matrix either. Instead, I'm going to jump straight into training our MLR.  
+
+```{r, echo=FALSE}
+priceMLR <- lm(price ~ trim + condition + isOneOwner + mileage + year + color + displacement + fuel + state + region + soundSystem + wheelType + featureCount, data = carsData)
+summary(priceMLR)
+```
+
+\newpage
+
+Based on our results we can see that there are quite a few significant variables, however most of these are categorical and are related to one specific column, that being the trim (model) of the vehicle. The most significant predictors appear to be the trim, mileage, new/used status, year, and displacement. Also notably, featureCount is also quite significant but not to the same degree as the ones listed before this. This makes a lot of sense as in the real world these are often what people use as the primary indicators on condition and the usable life left of a car, then additional featureCount being an added value secondary to the initial evaluation of the more critical features.
+
+Some of these variables are probably highly correlated. Especially mileage and year as typically the older a car is the more miles it'll have.
+
+```{r, echo=FALSE, warning=FALSE}
+plot(priceMLR)
+```
+
+Especially based on the Q-Q residual plot we can see that currently we are not describing the upper most and lower most predictions very well, with our more central predictions seeming to be the most accurate which makes sense as value of the lowest and highest values probably being influenced by something that isn't being captured effectively by our data.
+
+\newpage
+
+### Data Set #2 - Twitter Posting
+We can see that the anti-botting has done pretty well as explained in the description with a very small amount of posts being spam/adult content. To start I'm going to go ahead and scale every row so that the sum of every row equals 1. This way when going to our next step we aren't disproportionately weighting any features when training our classification model.
+
+```{r, echo=FALSE}
+smDataMaster <- read_excel("social_marketing.xlsx")
+smData <- smDataMaster[2:37]
+countInfo <- as.data.frame(colSums(smData))
+colnames(countInfo) <- c('frequency')
+ggplot(countInfo, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "Top Categories") + xlab("Category")
+```
+```{r, echo=FALSE}
+smDataMaster$user_ID <- factor(smDataMaster$user_ID)
+smDataNorm <- smDataMaster
+smDataNorm[2:37] <- t(scale(t(smDataNorm[2:37]), center = FALSE, scale = colSums(t(smDataNorm[2:37]))))
+
+smDataNorm
+```
+
+As part of our continued exploratory analysis, we can see that a lot of our categories have covariance with one or more other categories making me think that we'll be fairly capable of summarizing our users into distinct groupings to give us a better idea of some of our user demographics.
+
+```{r, echo=FALSE}
+smDataCorr <- round(cor(smDataNorm[2:37]), 1)
+ggcorrplot(smDataCorr, method = 'square') + labs(title = "User Data Covariance Matrix") +
+   theme(axis.text.x = element_text(size=6, angle=90, vjust = .15),
+         axis.text.y = element_text(size=6),
+         panel.grid.major = element_blank()) 
+```
+
+\newpage
+
+Looking at our number of clusters analysis we can take a shot and say that the optimal number is probably 4, 6, or 9. I think it'll be worth it to go ahead and do multiple models corresponding with each of these predictably optimal number of clusters.
+
+```{r, echo=FALSE}
+fviz_nbclust(smDataNorm[2:37], kmeans, method = "wss")
+```
+
+Now we can go ahead and train our various models targeting 4, 6, and 9 centers.
+
+```{r, echo=FALSE, warning=FALSE}
+set.seed(100)
+kmeansResult4 <- kmeans(smDataNorm[2:37], centers = 4, iter.max = 10, nstart = 100)
+kmeansResult6 <- kmeans(smDataNorm[2:37], centers = 6, iter.max = 10, nstart = 100)
+kmeansResult9 <- kmeans(smDataNorm[2:37], centers = 9, iter.max = 10, nstart = 100)
+fviz_cluster(kmeansResult4, data = smDataNorm[2:37], geom = 'point', ellipse.type = "convex", ggtheme = theme_bw())
+fviz_cluster(kmeansResult6, data = smDataNorm[2:37], geom = 'point', ellipse.type = "convex", ggtheme = theme_bw())
+fviz_cluster(kmeansResult9, data = smDataNorm[2:37], geom = 'point', ellipse.type = "convex", ggtheme = theme_bw())
+```
+
+Initially looking at these plots they may look like they are a mess, but since we can only look at 2 of the dimensions at a time, we are missing a lot of information that we can't really visually see so lets see if we can better summarize these groups by a summary of their groups.
+
+\newpage
+
+To start we're going to go ahead and summarize our 4 center model groups. Our groups appear to be somewhat distinct.
+
+* Group 1 - "Women" 
+This group definition is based on the fact that they are primarily interested in cooking, fashion, and beauty.
+
+* Group 2 - "Chatter/Photo Sharing"
+A catch-all group where the user doesn't appear to really fall into any specific group other than chatter and photo sharing.
+
+* Group 3 - "College Students" 
+This is based on the fact that they are very involved in general chatter, but are also equally interested in politics, college/uni, travel, news, current, events, and food. All pretty indicative activities of college students.
+
+* Group 4 - "Health Nuts"
+These people are very interested in health/nutrition, personal fitness, cooking, and the outdoors.
+
+```{r, echo=FALSE}
+smDataNorm$fourGroups <- kmeansResult4$cluster
+smDataNorm$sixGroups <- kmeansResult6$cluster
+smDataNorm$nineGroups <- kmeansResult9$cluster
+
+g4g1 <- as.data.frame(colSums(smDataNorm[smDataNorm$fourGroups == 1,][2:37]))
+colnames(g4g1) <- c('frequency')
+ggplot(g4g1, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "4 Centers, Group 1 Top Categories") + xlab("Category")
+
+g4g2 <- as.data.frame(colSums(smDataNorm[smDataNorm$fourGroups == 2,][2:37]))
+colnames(g4g2) <- c('frequency')
+ggplot(g4g2, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "4 Centers, Group 2 Top Categories") + xlab("Category")
+
+g4g3 <- as.data.frame(colSums(smDataNorm[smDataNorm$fourGroups == 3,][2:37]))
+colnames(g4g3) <- c('frequency')
+ggplot(g4g3, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "4 Centers, Group 3 Top Categories") + xlab("Category")
+
+g4g4 <- as.data.frame(colSums(smDataNorm[smDataNorm$fourGroups == 4,][2:37]))
+colnames(g4g4) <- c('frequency')
+ggplot(g4g4, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "4 Centers, Group 4 Top Categories") + xlab("Category")
+```
+
+\newpage
+
+Moving on we're going to go ahead and summarize our 6 center model groups. Once again our groups appear to be somewhat distinct.
+
+* Group 1 - "College Age Gamers"
+This group appears to be primarily interested in college/university and online gaming.
+
+* Group 2 - "Chatter/Photo Sharing"
+A catch-all group where the user doesn't appear to really fall into any specific group other than chatter and photo sharing.
+
+* Group 3 - "Women" 
+This group definition is based on the fact that they are primarily interested in cooking, fashion, and beauty.
+
+* Group 4 - "Worldly Current Event"
+This group is primarily interested in politics, news, and travel.
+
+* Group 5 - "Media Consumers"
+This group engages in a lot of chatter but also engages in sports, food, current events, and tv/film.
+
+* Group 6 - "Health Nuts"
+These people are very interested in health/nutrition, personal fitness, cooking, and the outdoors.
+
+```{r, echo=FALSE}
+g6g1 <- as.data.frame(colSums(smDataNorm[smDataNorm$sixGroups == 1,][2:37]))
+colnames(g6g1) <- c('frequency')
+ggplot(g6g1, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "6 Centers, Group 1 Top Categories") + xlab("Category")
+
+g6g2 <- as.data.frame(colSums(smDataNorm[smDataNorm$sixGroups == 2,][2:37]))
+colnames(g6g2) <- c('frequency')
+ggplot(g6g2, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "6 Centers, Group 2 Top Categories") + xlab("Category")
+
+g6g3 <- as.data.frame(colSums(smDataNorm[smDataNorm$sixGroups == 3,][2:37]))
+colnames(g6g3) <- c('frequency')
+ggplot(g6g3, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "6 Centers, Group 3 Top Categories") + xlab("Category")
+
+g6g4 <- as.data.frame(colSums(smDataNorm[smDataNorm$sixGroups == 4,][2:37]))
+colnames(g6g4) <- c('frequency')
+ggplot(g6g4, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "6 Centers, Group 4 Top Categories") + xlab("Category")
+
+g6g5 <- as.data.frame(colSums(smDataNorm[smDataNorm$sixGroups == 5,][2:37]))
+colnames(g6g5) <- c('frequency')
+ggplot(g6g5, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "6 Centers, Group 5 Top Categories") + xlab("Category")
+
+g6g6 <- as.data.frame(colSums(smDataNorm[smDataNorm$sixGroups == 6,][2:37]))
+colnames(g6g6) <- c('frequency')
+ggplot(g6g6, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "6 Centers, Group 6 Top Categories") + xlab("Category")
+```
+
+\newpage
+
+Finally we're going to go ahead and summarize our 9 center model groups. Once again our groups appear to be somewhat distinct.
+
+* Group 1 - "American Family Values"
+This group appears to be primarily interested in sports, religion, food, family, and other family related topics.
+
+* Group 2 - "Women" 
+This group definition is based on the fact that they are primarily interested in cooking, fashion, and beauty.
+
+* Group 3 - "Political"
+This group appears to be primarily interested in politics and travel.
+
+* Group 4 - "Chatter/Photo Sharing"
+A catch-all group where the user doesn't appear to really fall into any specific group other than chatter and photo sharing.
+
+* Group 5 - "News and Current Events"
+This group is interested in news, politics, sports, and current events.
+
+* Group 6 - "Porn Users"
+This group primarily interacts with pornographic/adult content.
+
+* Group 7 - "Health Nuts"
+These people are very interested in health/nutrition, personal fitness, cooking, and the outdoors.
+
+* Group 8 - "Media Consumers"
+This group engages in a lot of chatter but also engages in tv/film, art, travel, and music.
+
+* Group 9 - "College Age Gamers"
+This group appears to be primarily interested in college/university and online gaming.
+
+```{r, echo=FALSE}
+g9g1 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 1,][2:37]))
+colnames(g9g1) <- c('frequency')
+ggplot(g9g1, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 1 Top Categories") + xlab("Category")
+
+g9g2 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 2,][2:37]))
+colnames(g9g2) <- c('frequency')
+ggplot(g9g2, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 2 Top Categories") + xlab("Category")
+
+g9g3 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 3,][2:37]))
+colnames(g9g3) <- c('frequency')
+ggplot(g9g3, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 3 Top Categories") + xlab("Category")
+
+g9g4 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 4,][2:37]))
+colnames(g9g4) <- c('frequency')
+ggplot(g9g4, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 4 Top Categories") + xlab("Category")
+
+g9g5 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 5,][2:37]))
+colnames(g9g5) <- c('frequency')
+ggplot(g9g5, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 5 Top Categories") + xlab("Category")
+
+g9g6 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 6,][2:37]))
+colnames(g9g6) <- c('frequency')
+ggplot(g9g6, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 6 Top Categories") + xlab("Category")
+
+g9g7 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 7,][2:37]))
+colnames(g9g7) <- c('frequency')
+ggplot(g9g7, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 7 Top Categories") + xlab("Category")
+
+g9g8 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 8,][2:37]))
+colnames(g9g8) <- c('frequency')
+ggplot(g9g8, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 8 Top Categories") + xlab("Category")
+
+g9g9 <- as.data.frame(colSums(smDataNorm[smDataNorm$nineGroups == 9,][2:37]))
+colnames(g9g9) <- c('frequency')
+ggplot(g9g9, aes(x=reorder(row.names(countInfo), -frequency), y=frequency)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + labs(title = "9 Centers, Group 9 Top Categories") + xlab("Category")
+```
+
+\newpage
+
+In summary, I think all of our different number center models all produced useful and usable classification data. The 4 center model captures a larger number of users per group making it more efficient in casting the net wide, while the 9 center model splits these groups into more distinct groups allow us to better target a sub-demographic. Obviously this scale is going to be sliding based on the number of groups we have. I think interesting secondary investigation projects would be the following.
+
+* Does dropping chatter and photo/pictures help us identify new subgroups that get eaten up by the overwhelming volume of chatter/photo sharing?
+
+* Can we produce a wider gradient of user groups by introducing a wider range of model centers?
+
+* Effect of using a PCA covariance and dimensionality reduction on our final groupings.
